@@ -22,6 +22,7 @@ system.time(render("README.Rmd", output_file = "README.html"))
 <!--- { startup -->
 ```{r, startup, eval=TRUE, include=FALSE}
 here::i_am("./README.Rmd")
+library(here)
 source(here("R", "power_flux.R"))
 ```
 <!--- } -->
@@ -31,7 +32,22 @@ Chamber-based measurements of N$_2$O and CH$_4$ fluxes have particular character
 We present guidelines for how to do this, and analysis of the necessary sample size (power analysis). We consider the uncertainty in individual flux measurements, spatial means, cumulative fluxes at the field scale, and between-treatment differences in emission factors. We show how these depend on: chamber height; analyser precision; the number of chamber measurements; the length of time and number of gas samples per measurement; and the magnitude and skewness of the spatial and temporal distributions.  The number of samples required to detect differences is larger than is commonly assumed.
 
 ## Individual chamber flux measurements
-We can define a function which calculates the 95% confidence interval (CI) in chamber flux measurements, given the characteristic of the chamber and analyser.
+The flux of a GHG from the soil surface within a chamber is calculated from the rate of change in the mixing ratio $d \chi / d t$ (in mol GHG/mol air/ s), adjusted for the density of air per unit surface area:
+
+\begin{equation}
+    F = \frac{d \chi} {d t} \times \rho \frac{V}{A}
+\end{equation}
+
+where $F$ is the surface flux in mol GHG/m$^2$/s, $\rho$ is the density of air in mol/m$^3$, and $V$ and $A$ are the volume and area of the chamber (which simplifies to the height $h = V/A$ for most common chamber shapes). The term $\rho h$ can be considered a constant for a given chamber under typical conditions.
+
+The term $d \chi / d t$ is usually estimated as the slope $\beta$ of a linear regression between $\chi$ and time $t$ during the chamber closure (although various methods accounting for non-linearity are also used).
+The uncertainty in this term is estimated by the standard algebra of linear regression, where the 95% confidence interval (CI) in the slope $\beta$ is given:
+
+\begin{equation}
+    CI_{\beta}^{95} = \sqrt{ \frac{\sigma^2} {n-1 \sum (t_i - \bar{t})^2} } \times \mathbb{T}
+\end{equation}
+
+where $\sigma^2$ is the residual variance, $n$ is the number of data points, $\sum (t_i - \bar{t})^2$ is the variance in the $x$ independent variable, time, and $\mathbb{T}$ represents the t statistic, with a value of 1.96 for a sample size greater than 20. We can define a function which calculates this 95% confidence interval in chamber flux measurements, given the characteristic of the chamber and analyser.
 
 ```{r, echo = TRUE}
 get_ci_dist
