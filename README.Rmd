@@ -14,7 +14,7 @@ output:
 <!--- { rendering -->
 ```{r rendering, eval=FALSE, echo=FALSE}
 library(rmarkdown)
-knitr::opts_chunk$set(echo=FALSE, results="asis", warning=FALSE, message=FALSE, cache=FALSE)
+#knitr::opts_chunk$set(echo=TRUE, results="asis", warning=FALSE, message=FALSE, cache=FALSE)
 system.time(render("README.Rmd", output_file = "README.html"))
 ```
 <!--- } -->
@@ -23,6 +23,10 @@ system.time(render("README.Rmd", output_file = "README.html"))
 ```{r, startup, eval=TRUE, include=FALSE}
 here::i_am("./README.Rmd")
 library(here)
+library(viridis)
+library(hrbrthemes)
+library(plotly)
+
 source(here("R", "power_flux.R"))
 ```
 <!--- } -->
@@ -46,7 +50,7 @@ $$CI_{\beta}^{95} = \sqrt{ \frac{\sigma^2} {n-1 \sum (t_i - \bar{t})^2} } \times
 where $\sigma^2$ is the residual variance, $n$ is the number of data points, $\sum (t_i - \bar{t})^2$ is the variance in the $x$ independent variable, time, and $\mathbb{T}$ represents the t statistic, with a value of 1.96 for a sample size greater than 20. We can define a function which calculates this 95% confidence interval in chamber flux measurements, given the characteristic of the chamber and analyser.
 
 ```{r, echo = TRUE}
-get_ci_dist
+get_ci
 ```
 
 To illustrate, we can calculate the CI in flux measurements from a chamber of height 0.23 m and an analyser with noise of 20 nmol/mol (standard deviation) and 10 samples recorded over 5 minutes. 
@@ -68,7 +72,7 @@ p <- p + geom_line()
 p
 ```
 
-The figure above shows the specified distribution of flux values in relation to the calculated CI of 1.24 nmol/m$^2$/s. This shows that 
+The figure above shows the specified distribution of flux values in relation to the calculated CI of 1.24 nmol/m^2^/s. This shows that 
 `r round(dlnorm(1.24, meanlog = 0, sdlog = 1)*100, 0)`% of fluxes (shaded red) will be lower than the CI, which can be considered as a limit of detection for the chamber-analyser system. 
 
 ### Variation in CI with chamber height
@@ -78,8 +82,8 @@ Using this function, we can examine how CI varies with various properties of the
 ```{r}
 v_height <- seq(0.1, 0.9, by = 0.1)
 l_dt <- lapply(v_height, function(i){get_ci_dist(height = i)})
-dt <- rbindlist(l_dt)
-p <- ggplot(dt, aes(flux, prob))
+dt_h <- rbindlist(l_dt)
+p <- ggplot(dt_h, aes(flux, prob))
 p <- p + geom_area(aes(fill = flux > ci_flux))
 p <- p + geom_line()
 p <- p + facet_wrap(~ height) + ggtitle("Chamber height in m")
@@ -93,10 +97,30 @@ Secondly, we see how CI is influenced by analyser noise.
 ```{r}
 v_noise <- seq(1, 27, by = 3)
 l_dt <- lapply(v_noise, function(i){get_ci_dist(noise = i)})
-dt <- rbindlist(l_dt)
-p <- ggplot(dt, aes(flux, prob))
+dt_noise <- rbindlist(l_dt)
+p <- ggplot(dt_noise, aes(flux, prob))
 p <- p + geom_area(aes(fill = flux > ci_flux))
 p <- p + geom_line()
 p <- p + facet_wrap(~ noise) + ggtitle("Analyser noise in nmol/mol")
 p
 ```
+
+### Combine sources of variation in CI
+
+We can plot the effect of both of these on CI as an image, showing how the percentage of fluxes which will be detectable (greater than the upper CI) varies with chamber height and analyser noise. 
+
+```{r, eval=TRUE}
+dt <- data.table(expand.grid(height = v_height, noise = v_noise))
+dt[, ci_flux := get_ci(height = height, noise = noise)]
+dt[, percent_detectable := get_percent_detectable(height = height, noise = noise)]
+
+p <- ggplot(dt, aes(height, noise, fill = percent_detectable, 
+  text = paste("CI:", round(ci_flux, 3)))) + 
+  geom_tile() +
+  scale_fill_viridis(discrete=FALSE) +
+  theme_ipsum()
+
+ggplotly(p, tooltip = "text")
+```
+
+We can further dimensions for measurement length and number of data points.
