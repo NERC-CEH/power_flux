@@ -14,7 +14,7 @@ output:
 <!--- { rendering -->
 ```{r rendering, eval=FALSE, echo=FALSE}
 library(rmarkdown)
-#knitr::opts_chunk$set(echo=TRUE, results="asis", warning=FALSE, message=FALSE, cache=FALSE)
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, cache=FALSE)
 system.time(render("README.Rmd", output_file = "README.html"))
 ```
 <!--- } -->
@@ -23,6 +23,7 @@ system.time(render("README.Rmd", output_file = "README.html"))
 ```{r, startup, eval=TRUE, include=FALSE}
 here::i_am("./README.Rmd")
 library(here)
+library(fs)
 library(viridis)
 library(hrbrthemes)
 library(plotly)
@@ -50,7 +51,7 @@ $$CI_{\beta}^{95} = \sqrt{ \frac{\sigma^2} {n-1 \sum (t_i - \bar{t})^2} } \times
 where $\sigma^2$ is the residual variance, $n$ is the number of data points, $\sum (t_i - \bar{t})^2$ is the variance in the $x$ independent variable, time, and $\mathbb{T}$ represents the t statistic, with a value of 1.96 for a sample size greater than 20. We can define a function which calculates this 95% confidence interval in chamber flux measurements, given the characteristic of the chamber and analyser.
 
 ```{r, echo = TRUE}
-get_ci
+get_ci_flux
 ```
 
 To illustrate, we can calculate the CI in flux measurements from a chamber of height 0.23 m and an analyser with noise of 20 nmol/mol (standard deviation) and 10 samples recorded over 5 minutes. 
@@ -111,7 +112,7 @@ We can plot the effect of both of these on CI as an image, showing how the perce
 
 ```{r, eval=TRUE}
 dt <- data.table(expand.grid(height = v_height, noise = v_noise))
-dt[, ci_flux := get_ci(height = height, noise = noise)]
+dt[, ci_flux := get_ci_flux(height = height, noise = noise)]
 dt[, percent_detectable := get_percent_detectable(height = height, noise = noise)]
 
 p <- ggplot(dt, aes(height, noise, fill = percent_detectable, 
@@ -119,8 +120,53 @@ p <- ggplot(dt, aes(height, noise, fill = percent_detectable,
   geom_tile() +
   scale_fill_viridis(discrete=FALSE) +
   theme_ipsum()
-
-ggplotly(p, tooltip = "text")
+p
+# ggplotly(p, tooltip = "text")
 ```
 
-We can further dimensions for measurement length and number of data points.
+We can add further dimensions for measurement length and number of data points.
+
+## Uncertainty in Spatial Means
+The lognormal distribution of fluxes makes it more difficult to estimate the mean flux over an area at a given time. We can illustrate this by comparing the sampling error as a function of sample size for lognormal versus normally-distributed data. It is hard to compare like-with-like here, but we compare a
+lognormal distribution with both mean $\mu_{log}$ and standard deviation $\sigma_{log}$ equal to 1 on the log scale against a normal distribution
+with the same mean and standard deviation in original units, given by
+$\mu = \mathrm{exp}(\mu_{log} + \sigma_{log}^2/2)$
+  and $\sigma = \mathrm{exp}(\sigma_{log})$.
+  
+Given these two distributions, we sample from these with a range of sample sizes and examine how close the sample mean is to the true mean. By repeating the simulation 10000 times, we can quantify how the typical error changes with sample size in normal and lognormally-distributed data.
+We express this as the coefficient of variation ($CV  = \sigma / \mu \times 100$).
+The figure below shows that the CV is twice as large for lognormally-distributed data at the equivalent sample size.
+
+```{r, eval=FALSE}
+df_logn <- data.frame(t(sapply(c(3:20, 25, 30, 40), get_sigma_spatial, location = 1)))
+df_norm <- data.frame(t(sapply(c(3:20, 25, 30, 40), get_sigma_spatial, location = 1, dist_lognormal = FALSE)))
+df <- rbind(df_norm, df_logn)
+df$lognormal <- as.logical(df$dist_lognormal)
+p <- ggplot(df, aes(n_samples, cv, colour = lognormal))
+p <- p + geom_line()
+p
+
+```
+
+## Uncertainty in Cumulative Fluxes at the Field Scale
+tbc
+
+## Uncertainty in  Between-Treatment Differences in Emission Factors
+tbc
+
+
+```{r, eval=FALSE, echo=FALSE}
+library(lintr)
+library(styler)
+library(diffr)
+fname <- "./R/power_flux.R"
+# make a back-up
+fname_backup <- paste0(path_ext_remove(fname), "_backup.R")
+file_copy(fname, fname_backup, overwrite = TRUE)
+# rewrite the file in the tidyverse style
+style_file(fname)
+# visualise the changes made
+diffr(fname_backup, fname)
+# check with lint
+lint(fname)
+```
