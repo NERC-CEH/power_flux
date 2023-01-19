@@ -145,11 +145,20 @@ df$lognormal <- as.logical(df$dist_lognormal)
 p <- ggplot(df, aes(n_samples, cv, colour = lognormal))
 p <- p + geom_line()
 p
-
 ```
 
 ## Uncertainty in Cumulative Fluxes at the Field Scale
 tbc
+
+```{r, eval=FALSE, echo=FALSE}
+get_omega_sd(noise = 3, n_sims = 7)
+
+df <- data.frame(t(sapply(0:2, get_omega_sd)))
+df$lognormal <- as.logical(df$dist_lognormal)
+p <- ggplot(df, aes(n_samples, cv, colour = lognormal))
+p <- p + geom_line()
+p
+```
 
 ## Uncertainty in  Between-Treatment Differences in Emission Factors
 tbc
