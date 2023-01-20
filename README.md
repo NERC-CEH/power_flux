@@ -181,6 +181,8 @@ p <- p + geom_line()
 p
 ```
 
+![](README_files/figure-html/unnamed-chunk-7-1.png)<!-- -->
+
 ## Uncertainty in Cumulative Fluxes at the Field Scale
 tbc
 

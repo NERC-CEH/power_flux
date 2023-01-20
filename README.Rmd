@@ -137,7 +137,7 @@ Given these two distributions, we sample from these with a range of sample sizes
 We express this as the coefficient of variation ($CV  = \sigma / \mu \times 100$).
 The figure below shows that the CV is twice as large for lognormally-distributed data at the equivalent sample size.
 
-```{r, eval=FALSE}
+```{r, eval=TRUE}
 df_logn <- data.frame(t(sapply(c(3:20, 25, 30, 40), get_sigma_spatial, location = 1)))
 df_norm <- data.frame(t(sapply(c(3:20, 25, 30, 40), get_sigma_spatial, location = 1, dist_lognormal = FALSE)))
 df <- rbind(df_norm, df_logn)
