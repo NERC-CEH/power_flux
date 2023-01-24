@@ -27,8 +27,10 @@ library(fs)
 library(viridis)
 library(hrbrthemes)
 library(plotly)
+library(ggforce)
 
 source(here("R", "power_flux.R"))
+do_all <- TRUE # FALSE # TRUE
 ```
 <!--- } -->
 
@@ -137,7 +139,7 @@ Given these two distributions, we sample from these with a range of sample sizes
 We express this as the coefficient of variation ($CV  = \sigma / \mu \times 100$).
 The figure below shows that the CV is twice as large for lognormally-distributed data at the equivalent sample size.
 
-```{r, eval=TRUE}
+```{r, eval = do_all}
 df_logn <- data.frame(t(sapply(c(3:20, 25, 30, 40), get_sigma_spatial, location = 1)))
 df_norm <- data.frame(t(sapply(c(3:20, 25, 30, 40), get_sigma_spatial, location = 1, dist_lognormal = FALSE)))
 df <- rbind(df_norm, df_logn)
@@ -150,18 +152,290 @@ p
 ## Uncertainty in Cumulative Fluxes at the Field Scale
 tbc
 
-```{r, eval=FALSE, echo=FALSE}
-get_omega_sd(noise = 3, n_sims = 7)
+To examine the effect of the above uncertainties on cumulative fluxes at the field scale, we use output from the DNDC model to represent the true time course of fluxes following a fertiliser application. The figure below shows daily values, with an initial peak and declining to near zero by day 10. This is typical of output from DNDC and similar process-based models.
 
-df <- data.frame(t(sapply(0:2, get_omega_sd)))
-df$lognormal <- as.logical(df$dist_lognormal)
-p <- ggplot(df, aes(n_samples, cv, colour = lognormal))
-p <- p + geom_line()
+```{r, eval=TRUE, echo=FALSE, fig.cap = "Fig x. DNDC model output."}
+mdf <- read.csv(here("data-raw/dndc", "dndc_output.csv"))
+mdf <- subset(mdf, site == "Edinburgh Grass")
+mdf$days_since_fert <- set_units(mdf$days_since_fert + 0.01, days)
+mdf$secs_since_fert <- set_units(mdf$days_since_fert, secs)
+# mdf$secs_since_fert <- mdf$days_since_fert * secsPerDay
+# mdf$Fn2o_dndc <- mdf$Fn2o_kgN_ha_d * 1e3 * 1e9 /28 / 10000 / (24*60*60) # nmol m2 s
+mdf$Fn2o_kgN_ha_d <- set_units(mdf$Fn2o_kgN_ha_d, kg/ha/day)
+mdf$Fn2o_nmol_m2_s <- set_units(mdf$Fn2o_kgN_ha_d, nmol_n2o/m2/s)
+
+fit <- fit_gam_logn(mdf, "secs_since_fert", "Fn2o_nmol_m2_s")
+
+p <- ggplot(mdf, aes(days_since_fert, Fn2o_nmol_m2_s)) # + theme_bw()
+#p <- p + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+#p <- p + xlim(0.0, NA) + ylim(0.0, NA)
+p <- p + geom_ribbon(aes(ymin = set_units(0, nmol_n2o/m2/s), ymax = Fn2o_nmol_m2_s), fill = "grey", alpha = 0.5)
+#p <- p + geom_line(data = pdf, aes(y = Fpred_gam), colour = "green")  
+p <- p + geom_line(aes(y = fit$Fpred_logn), colour = "black")  
+p <- p + geom_point() 
+# p <- p + xlab("Time since fertilizer application") 
+# p <- p + ylab(expression(paste(N[2]*"O flux / "*~nmol~m^-2~s^-1)))
+p <- p + ylab(expression(paste(N[2]*"O flux")))
+p <- p + facet_wrap(~ site, scales = "free_y") 
 p
 ```
 
+Using this output as the time course of the true mean, we can simulate sets of chamber samples which might be realised, given specified spatial variability and noise in the measurements system. We do this using the model of Levy et al (2018):
+
+$$ \mu_{t} = \mathtt{dlnorm}(t, \Delta, k) N_\mathrm{in} \Omega $$
+
+which gives the (arithmetic) mean flux at time $t$ following fertilisation with a quantity of nitrogen $N_\mathrm{in}$ and emission factor $\Omega$, and a time course given by the lognormal function with location $\Delta$ and scale $k$. At any time $t$, the N$_2$O flux has a lognormal distribution in space:
+
+$$ F \sim \ln\mathcal{N}(\mu_{\mathrm{log,}t}, \sigma_s^2)$$
+where
+$$ \mu_{\mathrm{log,}t} = \mathrm{log}(\mu_{t}) - 0.5 \sigma_s^2 $$
+
+where $\sigma_s$ is the spatial standard deviation of the log-transformed flux. As examples, the figure below shows five realisations in turn. 
+
+```{r, fig.show='animate', interval = 2, results='hide', echo=FALSE}
+set.seed(448)
+get_omega_sd(noise = 10)
+get_omega_sd(noise = 10)
+get_omega_sd(noise = 10)
+get_omega_sd(noise = 10)
+get_omega_sd(noise = 10)
+```
+
+
+The time course of the true mean is shown in black, and is the same in each case. Blue points show the true flux at each of the chamber locations, assuming a spatial variability given by $\sigma_s$ = 0.6. The red points show simulated measurements, with measurement noise in the system specified by $\sigma$ = 10 nmol/mol  (the residual term in the regression of $d \chi$ versus $d t$ in Equation 2 above) The red line shows the daily mean of measurements; the measured cumulative flux is commonly taken as the trapezoidal integrgation of the area under this curve. This can be compared with the true cumulative flux, the area under the black curve. By iterating many times with different values representing spatial variability, measurement noise and time length, sampling intensity, and chamber height, we can examine the variation in the uncertainty in estimates of the cumulative flux.
+
+### Spatial variability
+Assume a range of spatial variability with no measurement noise.
+The uncertainty in the resulting cumulative flux is expressed as the coefficient of variation (CV): the standard deviation in the simulated estimates divided by the true mean $\times$ 100. We also show the bias: the mean difference between the simulated estimates and the true mean.
+
+```{r, sigma_s, eval=TRUE, echo=FALSE}
+n_sims <- 5000 # 100 for speed; 1000-10000 for precision
+df_err <- data.frame(t(sapply(seq(0, 1, 0.1), function(x) {
+      get_omega_sd(noise = 0, sigma_s = x, n_sims = n_sims, plot_graph = FALSE)
+    })))
+df_err[] <- lapply(df_err, unlist)
+cols <- c("CV" = "red", "Bias" = "blue")
+p <- ggplot(df_err, aes(sigma_s,  F_cum_error_pc))
+p <- p + scale_colour_manual(name="", values = cols)
+p <- p + geom_line(aes(colour = "CV")) + geom_point(aes(colour = "CV"))
+p <- p + geom_line(aes(y = F_cum_bias_pc, colour = "Bias")) + geom_point(aes(y = F_cum_bias_pc, colour = "Bias"))
+p <- p + ylim(-5, 45) + ylab("Uncertainty in cumulative flux (%)")
+p
+df_all <- df_err
+```
+
+### Measurement noise
+Assume a range of measurement noise with no spatial variability, and a chamber height of 23 cm.
+```{r, noise, eval=TRUE, echo=FALSE}
+df_err <- data.frame(t(sapply(seq(0, 20, 2), function(x) {
+      get_omega_sd(noise = x, sigma_s = 0, n_sims = n_sims, plot_graph = FALSE)
+    })))
+df_err[] <- lapply(df_err, unlist)
+cols <- c("CV" = "red", "Bias" = "blue")
+p <- ggplot(df_err, aes(noise,  F_cum_error_pc))
+p <- p + scale_colour_manual(name="", values = cols)
+p <- p + geom_line(aes(colour = "CV")) + geom_point(aes(colour = "CV"))
+p <- p + geom_line(aes(y = F_cum_bias_pc, colour = "Bias")) + geom_point(aes(y = F_cum_bias_pc, colour = "Bias"))
+p <- p + ylim(-5, 45) + ylab("Uncertainty in cumulative flux (%)")
+p
+df_all <- rbind(df_all, df_err)
+```
+
+### Chamber height
+Assume a range of chamber heights with measurement noise of 10 nmol/mol.
+
+Chamber height interacts linearly with measurement noise.
+```{r, height, eval=TRUE, echo=FALSE}
+df_err <- data.frame(t(sapply(seq(0.1, 1, 0.1), function(x) {
+      get_omega_sd(noise = 10.0, n_sims = n_sims, plot_graph = FALSE,
+                         height = x)
+    })))
+df_err[] <- lapply(df_err, unlist)
+cols <- c("CV" = "red", "Bias" = "blue")
+p <- ggplot(df_err, aes(height,  F_cum_error_pc))
+p <- p + scale_colour_manual(name="", values = cols)
+p <- p + geom_line(aes(colour = "CV")) + geom_point(aes(colour = "CV"))
+p <- p + geom_line(aes(y = F_cum_bias_pc, colour = "Bias")) + geom_point(aes(y = F_cum_bias_pc, colour = "Bias"))
+p <- p + ylim(-5, 45) + ylab("Uncertainty in cumulative flux (%)")
+p
+df_all <- rbind(df_all, df_err)
+```
+
+### Sampling intensity: number of measurement days
+Assume a range of measurement days with other values at their defaults.
+```{r, n_times, eval=TRUE, echo=FALSE}
+df_err <- data.frame(t(sapply(seq(1, 22, 1), function(x) {
+      get_omega_sd(n_sims = n_sims, plot_graph = FALSE,
+                         n_times = x)
+    })))
+df_err[] <- lapply(df_err, unlist)
+cols <- c("CV" = "red", "Bias" = "blue")
+p <- ggplot(df_err, aes(n_times,  F_cum_error_pc))
+p <- p + scale_colour_manual(name="", values = cols)
+p <- p + geom_line(aes(colour = "CV")) + geom_point(aes(colour = "CV"))
+p <- p + geom_line(aes(y = F_cum_bias_pc, colour = "Bias")) + geom_point(aes(y = F_cum_bias_pc, colour = "Bias"))
+p <- p + ylim(-5, 45) + ylab("Uncertainty in cumulative flux (%)")
+p
+df_all <- rbind(df_all, df_err)
+```
+
+### Sampling intensity: number of samples per flux measurement
+Assume a range of number of samples per flux measurement with other values at their defaults.
+```{r, n_samples_per_mmnt, eval=TRUE, echo=FALSE}
+df_err <- data.frame(t(sapply(seq(2, 22, 2), function(x) {
+      get_omega_sd(n_sims = n_sims, plot_graph = FALSE,
+                         n_samples_per_mmnt = x)
+    })))
+df_err[] <- lapply(df_err, unlist)
+cols <- c("CV" = "red", "Bias" = "blue")
+p <- ggplot(df_err, aes(n_samples_per_mmnt,  F_cum_error_pc))
+p <- p + scale_colour_manual(name="", values = cols)
+p <- p + geom_line(aes(colour = "CV")) + geom_point(aes(colour = "CV"))
+p <- p + geom_line(aes(y = F_cum_bias_pc, colour = "Bias")) + geom_point(aes(y = F_cum_bias_pc, colour = "Bias"))
+p <- p + ylim(-5, 45) + ylab("Uncertainty in cumulative flux (%)")
+p
+df_all <- rbind(df_all, df_err)
+```
+
+### Sampling intensity: number of flux measurements per day
+Assume a range of number of flux measurements per day (at each sampling interval) with other values at their defaults.
+```{r, n_samples_per_time, eval=TRUE, echo=FALSE}
+df_err <- data.frame(t(sapply(seq(2, 22, 2), function(x) {
+      get_omega_sd(n_sims = n_sims, plot_graph = FALSE,
+                         n_samples_per_time = x)
+    })))
+df_err[] <- lapply(df_err, unlist)
+cols <- c("CV" = "red", "Bias" = "blue")
+p <- ggplot(df_err, aes(n_samples_per_time,  F_cum_error_pc))
+p <- p + scale_colour_manual(name="", values = cols)
+p <- p + geom_line(aes(colour = "CV")) + geom_point(aes(colour = "CV"))
+p <- p + geom_line(aes(y = F_cum_bias_pc, colour = "Bias")) + geom_point(aes(y = F_cum_bias_pc, colour = "Bias"))
+p <- p + ylim(-5, 45) + ylab("Uncertainty in cumulative flux (%)")
+p
+df_all <- rbind(df_all, df_err)
+```
+
+### Sampling intensity: length of chamber closure for flux measurement
+Assume a range of chamber closure times for flux measurement, with other values at their defaults.
+```{r, mmnt_t_max, eval=TRUE, echo=FALSE}
+df_err <- data.frame(t(sapply(seq(2, 20, 2), function(x) {
+      get_omega_sd(n_sims = n_sims, plot_graph = FALSE,
+                         mmnt_t_max = x*60)
+    })))
+df_err[] <- lapply(df_err, unlist)
+cols <- c("CV" = "red", "Bias" = "blue")
+p <- ggplot(df_err, aes(mmnt_t_max / 60,  F_cum_error_pc))
+p <- p + scale_colour_manual(name="", values = cols)
+p <- p + geom_line(aes(colour = "CV")) + geom_point(aes(colour = "CV"))
+p <- p + geom_line(aes(y = F_cum_bias_pc, colour = "Bias")) + geom_point(aes(y = F_cum_bias_pc, colour = "Bias"))
+p <- p + ylim(-5, 45) + ylab("Uncertainty in cumulative flux (%)")
+p
+df_all <- rbind(df_all, df_err)
+```
+
+### Magnitude of fluxes: amount of N applied
+Assume a range of chamber closure times for flux measurement, with measurement noise of 20 nmol/mol.
+```{r, N_appl, eval=TRUE, echo=FALSE}
+v_N <- seq(20, 200, 20)
+v_N <- set_units(v_N, kg/ha)
+v_N <- set_units(v_N, nmol_n2o/m2)
+v_N <- drop_units(v_N)
+
+df_err <- data.frame(t(sapply(v_N, function(x) {
+      get_omega_sd(n_sims = n_sims, plot_graph = FALSE,
+                         noise = 20, N_appl = x)
+    })))
+df_err[] <- lapply(df_err, unlist)
+df_err$N_appl <- set_units(df_err$N_appl, nmol_n2o/m2)
+df_err$N_appl <- set_units(df_err$N_appl, kg/ha)
+
+cols <- c("CV" = "red", "Bias" = "blue")
+p <- ggplot(df_err, aes(N_appl,  F_cum_error_pc))
+p <- p + scale_colour_manual(name="", values = cols)
+p <- p + geom_line(aes(colour = "CV")) + geom_point(aes(colour = "CV"))
+p <- p + geom_line(aes(y = F_cum_bias_pc, colour = "Bias")) + geom_point(aes(y = F_cum_bias_pc, colour = "Bias"))
+p <- p + ylim(-5, 45) + ylab("Uncertainty in cumulative flux (%)")
+p
+df_all <- rbind(df_all, df_err)
+```
+
+### Summary
+Tabulate values for specific system set-up.
+
+```{r, summary, eval=TRUE, echo=FALSE}
+# typical static chamber set-up
+df_gc <- get_omega_sd(n_sims = 1000, plot_graph = FALSE,
+                       noise = 3, # nmol / mol
+                       n_times = 44,
+                       mmnt_t_max = 40*60, # flux measurement time length, s
+                       n_samples_per_mmnt = 4)
+df_gc$system <- "GC"
+# typical skyline set-up
+df_sky <- get_omega_sd(n_sims = 1000, plot_graph = FALSE,
+                       noise = 20, # nmol / mol
+                       height = 1.0,
+                       n_times = 44,
+                       mmnt_t_max = 5*60, # flux measurement time length, s
+                       n_samples_per_mmnt = 5*60/10) # every 10 s for 5 mins
+df_sky$system <- "Skyline"
+# typical QCL fast chamber set-up
+df_qcl <- get_omega_sd(n_sims = 1000, plot_graph = FALSE,
+                       noise = 0.1, # nmol / mol
+                       n_times = 44,
+                       mmnt_t_max = 5*60, # flux measurement time length, s
+                       n_samples_per_mmnt = 5*60/10) # every 10 s for 5 mins
+df_qcl$system <- "QCL-Fast chamber"
+
+df_sys <- rbind(df_gc, df_sky, df_qcl)
+
+p <- ggplot(df_sys, aes(system, F_cum_error_pc, fill = system))
+p <- p + geom_bar(stat = "identity")
+#p <- p + geom_point(aes(y = F_cum_bias_pc))
+p <- p + ylab("Uncertainty in cumulative flux (%)")
+p
+
+knitr::kable(with(df_sys, 
+  data.frame(system = system, F_cum_error_cv = F_cum_error_pc, 
+    F_cum_error_ci = F_cum_error_pc * 1.96)))
+# extract typical or best value    
+ci_cv <- subset(df_sys, system == "QCL-Fast chamber")$F_cum_error_pc * 1.96
+```
+
+
+```{r, eval=FALSE, echo=FALSE}
+get_omega_sd(noise = 20, sigma_s = 0, n_samples_per_mmnt = 10, n_sims = 1)
+df_err <- get_omega_sd(delta = 12, k = 2, noise = 20, sigma_s = 1, n_samples_per_mmnt = 3, n_sims = 3)
+df_err
+hist(l_err$v_F_cum_obs)
+hist((l_err$v_F_cum_obs - l_err$df$F_cum_true))
+mean(l_err$v_F_cum_obs - l_err$df$F_cum_true) / l_err$df$F_cum_true * 100
+mean(l_err$v_omega_obs - l_err$df$omega_true) / l_err$df$omega_true * 100
+l_err$df$F_cum_rmsd / l_err$df$F_cum_true * 100
+l_err$df$omega_rmsd / l_err$df$omega_true * 100
+l_err$df$omega_bias * 100
+
+#df_err <- do.call(cbind, sapply(c(0, 2, 4, 8, 16, 32), function(x) {
+##* WIP
+# seems a bit too insensitive to noise - needs checking
+df_err <- data.frame(t(sapply(c(0, 0.2, 0.4, 0.8, 1.6), function(x) {
+df_err <- data.frame(t(sapply(1:20, function(x) {
+
+df_err <- data.frame(t(sapply(seq(0.1, 1, 0.1), function(x) {
+      get_omega_sd(noise = 20, sigma_s = 0.6, n_sims = 100, # n_times = 8,
+                         height = x,
+                         n_samples_per_time = 4, 
+                         n_samples_per_mmnt = 2)
+    })))
+df_err[] <- lapply(df_err, unlist)
+p <- ggplot(df_err, aes(height,  ci_flux))
+p <- p + geom_line() + geom_point()
+p
+df_err
+```
+
 ## Uncertainty in  Between-Treatment Differences in Emission Factors
-tbc
+The table above shows the typical uncertainty (95 % CI) in cumulative fluxes to be of the order of `r round(ci_cv, 0)` % of the true value. If we want to detect differences in cumulative fluxes between two treatments, the variance is additive, so this becomes `r round(sqrt(ci_cv^2 + ci_cv^2), 0) ` %. In practical terms, this means that the difference between cumulative fluxes (and therefore emission factors) in two treatments would need to be greater than around `r round(sqrt(ci_cv^2 + ci_cv^2), 0) `% of the mean to be statistically detectable.
+
 
 
 ```{r, eval=FALSE, echo=FALSE}

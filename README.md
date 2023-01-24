@@ -186,10 +186,80 @@ p
 ## Uncertainty in Cumulative Fluxes at the Field Scale
 tbc
 
+To examine the effect of the above uncertainties on cumulative fluxes at the field scale, we use output from the DNDC model to represent the true time course of fluxes following a fertiliser application. The figure below shows daily values, with an initial peak and declining to near zero by day 10. This is typical of output from DNDC and similar process-based models.
+
+![Fig x. DNDC model output.](README_files/figure-html/unnamed-chunk-8-1.png)
+
+Using this output as the time course of the true mean, we can simulate sets of chamber samples which might be realised, given specified spatial variability and noise in the measurements system. We do this using the model of Levy et al (2018):
+
+$$ \mu_{t} = \mathtt{dlnorm}(t, \Delta, k) N_\mathrm{in} \Omega $$
+
+which gives the (arithmetic) mean flux at time $t$ following fertilisation with a quantity of nitrogen $N_\mathrm{in}$ and emission factor $\Omega$, and a time course given by the lognormal function with location $\Delta$ and scale $k$. At any time $t$, the N$_2$O flux has a lognormal distribution in space:
+
+$$ F \sim \ln\mathcal{N}(\mu_{\mathrm{log,}t}, \sigma_s^2)$$
+where
+$$ \mu_{\mathrm{log,}t} = \mathrm{log}(\mu_{t}) - 0.5 \sigma_s^2 $$
+
+where $\sigma_s$ is the spatial standard deviation of the log-transformed flux. As examples, the figure below shows five realisations in turn. 
+
+<video controls loop><source src="README_files/figure-html/unnamed-chunk-9.webm" /></video>
+
+
+The time course of the true mean is shown in black, and is the same in each case. Blue points show the true flux at each of the chamber locations, assuming a spatial variability given by $\sigma_s$ = 0.6. The red points show simulated measurements, with measurement noise in the system specified by $\sigma$ = 10 nmol/mol  (the residual term in the regression of $d \chi$ versus $d t$ in Equation 2 above) The red line shows the daily mean of measurements; the measured cumulative flux is commonly taken as the trapezoidal integrgation of the area under this curve. This can be compared with the true cumulative flux, the area under the black curve. By iterating many times with different values representing spatial variability, measurement noise and time length, sampling intensity, and chamber height, we can examine the variation in the uncertainty in estimates of the cumulative flux.
+
+### Spatial variability
+Assume a range of spatial variability with no measurement noise.
+The uncertainty in the resulting cumulative flux is expressed as the coefficient of variation (CV): the standard deviation in the simulated estimates divided by the true mean $\times$ 100. We also show the bias: the mean difference between the simulated estimates and the true mean.
+
+![](README_files/figure-html/sigma_s-1.png)<!-- -->
+
+### Measurement noise
+Assume a range of measurement noise with no spatial variability, and a chamber height of 23 cm.
+![](README_files/figure-html/noise-1.png)<!-- -->
+
+### Chamber height
+Assume a range of chamber heights with measurement noise of 10 nmol/mol.
+
+Chamber height interacts linearly with measurement noise.
+![](README_files/figure-html/height-1.png)<!-- -->
+
+### Sampling intensity: number of measurement days
+Assume a range of measurement days with other values at their defaults.
+![](README_files/figure-html/n_times-1.png)<!-- -->
+
+### Sampling intensity: number of samples per flux measurement
+Assume a range of number of samples per flux measurement with other values at their defaults.
+![](README_files/figure-html/n_samples_per_mmnt-1.png)<!-- -->
+
+### Sampling intensity: number of flux measurements per day
+Assume a range of number of flux measurements per day (at each sampling interval) with other values at their defaults.
+![](README_files/figure-html/n_samples_per_time-1.png)<!-- -->
+
+### Sampling intensity: length of chamber closure for flux measurement
+Assume a range of chamber closure times for flux measurement, with other values at their defaults.
+![](README_files/figure-html/mmnt_t_max-1.png)<!-- -->
+
+### Magnitude of fluxes: amount of N applied
+Assume a range of chamber closure times for flux measurement, with measurement noise of 20 nmol/mol.
+![](README_files/figure-html/N_appl-1.png)<!-- -->
+
+### Summary
+Tabulate values for specific system set-up.
+
+![](README_files/figure-html/summary-1.png)<!-- -->
+
+|system           | F_cum_error_cv| F_cum_error_ci|
+|:----------------|--------------:|--------------:|
+|GC               |       13.56212|       26.58176|
+|Skyline          |       20.91906|       41.00136|
+|QCL-Fast chamber |       13.64478|       26.74376|
+
+
 
 
 ## Uncertainty in  Between-Treatment Differences in Emission Factors
-tbc
+The table above shows the typical uncertainty (95 % CI) in cumulative fluxes to be of the order of 27 % of the true value. If we want to detect differences in cumulative fluxes between two treatments, the variance is additive, so this becomes 38 %. In practical terms, this means that the difference between cumulative fluxes (and therefore emission factors) in two treatments would need to be greater than around 38% of the mean to be statistically detectable.
+
 
 
 

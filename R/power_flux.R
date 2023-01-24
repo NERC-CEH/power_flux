@@ -1,13 +1,95 @@
 library(data.table)
 library(ggplot2)
 library(units)
+library(mgcv)
 library(caTools)
 library(fitdistrplus)
-library(boot)
+# library(boot)
 # library(MBESS)
 
 # constants
+# define the conversion unit between g N and moles of N2O
+install_unit("mol_n2o", "28 g", "mol wt of N in N2O")
+secsPerDay <- 24*60*60
 rho <- 41.742 # air density at STP, mol m-3
+
+# Function that returns the mode of a vector
+Mode <- function(x) {
+  d <- density(x)
+  d$x[which.max(d$y)]
+}
+
+# Function that returns Root Mean Squared Error
+rmse <- function(error){
+    sqrt(mean(error^2))
+}
+
+# Function that returns Mean Absolute Error
+mae <- function(error){
+    mean(abs(error))
+}
+
+# Function fits gam and lognormal model to time series of fluxes
+# and calculates cumulative flux by these and trapezoidal method.
+# Returns model parameters and predictions of time series and cumulative fluxes
+fit_gam_logn <- function(df, t, Fn2o){
+#df <- subset(mdf, site == "Edinburgh Grass"); t = "secs_since_fert"; Fn2o = "Fn2o_nmol_m2_s"
+#df = subset(ch_df, fertID == "EBS_2006-08-08"); t = "secs_since_fert"; Fn2o = "Fn2o"
+   
+  df <- drop_units(df)
+  # get arithmetic mean of flux at each time point
+  Fn2o_mean <- aggregate(df[[Fn2o]], by = list(df[[t]]), FUN = mean)
+  # rename agg outputs for time series of ch means
+  t_mean <- Fn2o_mean[["Group.1"]]
+  Fn2o_mean <- Fn2o_mean[["x"]]
+
+  # time point to accumulate over 
+  ####### check units ######
+  t_cum <- 25 * secsPerDay # 
+#  t_cum <- set_units(25 * secsPerDay, secs) # 
+
+  # 1. Calculate cumulative flux by trapezoidal method
+  Fcum_trap <- trapz(t_mean, Fn2o_mean)
+  Fcum_trap <- trapz(c(t_mean, t_cum), c(Fn2o_mean, 0))
+    
+  # 2. Calculate cumulative flux for dndc output by gam method
+  ########### need to add a try catch here - sometimes fails
+  x <- t_mean 
+  result <- try(mod.gam <- gam(Fn2o_mean ~ s(x, bs = "cr")))
+  # fitted model predictions
+  adf <- data.frame(x = t_cum)
+  #flux_gam <- predict.gam(mod.gam, df, se=FALSE, newdata.guaranteed=TRUE)
+  if (class(result) == "try-error"){ # fit gam didn't work
+    # use lm instead
+    mod.lm <- lm(Fn2o_mean ~ x)
+    Fpred_gam <- predict(mod.lm, se=FALSE)
+    Fcum_gam  <- predict(mod.lm, adf, se=FALSE)
+  } else {   # use fit dist parameters
+    Fpred_gam <- predict.gam(mod.gam, se=FALSE)
+    Fcum_gam  <- predict.gam(mod.gam, adf, newdata.guaranteed=TRUE, se=FALSE)
+  }
+  
+  # 3. Calculate cumulative flux for dndc output by lognormal method
+  result <- try(fit <- fitdist(t_mean, "lnorm", weights = as.integer(Fn2o_mean*1e6+1)))
+  if (class(result) == "try-error"){ # fitdist didn't work
+    # use stats & Hmisc functions
+    delta <- weighted.mean(log(t), (Fn2o_mean+1))
+    k     <-  sqrt(wtd.var(log(t), (Fn2o_mean+1)))
+  } else {   # use fit dist parameters
+    delta <- as.numeric(fit$estimate["meanlog"])
+    k     <- as.numeric(fit$estimate["sdlog"])
+  }
+  Fpred_logn <- dlnorm(t_mean, delta, k)
+  fit <- lm(Fn2o_mean ~ 0 + Fpred_logn)
+  alpha <- as.numeric(coef(fit))
+  # fitted model predictions
+  Fpred_logn <- Fpred_logn * alpha
+  # predicted cumulative flux
+  Fcum_logn <- plnorm(t_cum, delta, k) * alpha
+
+  return(list(t_mean=t_mean, Fn2o_mean=Fn2o_mean, Fcum_trap=Fcum_trap, Fpred_gam=Fpred_gam, Fcum_gam=Fcum_gam, 
+    delta=delta, k=k, alpha=alpha, Fpred_logn=Fpred_logn, Fcum_logn=Fcum_logn))
+}
 
 # df_si <- get_SI_prefix_table()
 get_SI_prefix_table <- function() {
@@ -99,75 +181,116 @@ get_sigma_spatial <- function(n_samples = 10, n_sims = 1e5, location = 1,
   ))
 }
 
-get_omega_sd <- function(noise = 0, # 20,
-                         n_times = 5,
-                         n_samples_per_time = 3,
-                         n_sims = 4,
-                         time_max = 25,
-                         delta = 1, k = 0.5,
-                         sigma_s = 0, # 0.5,
-                         omega = 0.02,
-                         N_appl = 20014,
+get_omega_sd <- function(omega = 0.01,
+                         N_appl = 0.1489069 * 1e9, # enter as mol/m2 * 1e9 = nmol/m2
+                         noise = 1,                 # nmol / mol
                          SI_prefix = "nano",
+                         n_times = 18,
+                         n_samples_per_time = 4,
+                         n_sims = 3,
+                         time_max = 21 * secsPerDay, # time length over which measurements are taken, ~ 25 days but in secs
+                         delta = 11.8, 
+                         k = 0.6,
+                         sigma_s = 0.6,
                          height = 0.23,
-                         t_max = 300,
-                         n_samples_per_mmnt = 10,
-                         plot_graph = FALSE) {
+                         mmnt_t_max = 5*60, # flux measurement time length, s
+                         n_samples_per_mmnt = 4,
+                         plot_graph = TRUE) {
+
+df_params <- data.frame(omega   = omega,
+                         N_appl = N_appl,
+                         noise = noise,
+                         n_times = n_times,
+                         n_samples_per_time = n_samples_per_time,
+                         n_sims = n_sims,
+                         time_max = time_max, # time length over which measurements are taken, ~ 25 days but in secs
+                         delta = delta, 
+                         k = k,
+                         sigma_s = sigma_s,
+                         SI_prefix = SI_prefix,
+                         height = height,
+                         mmnt_t_max = mmnt_t_max, # flux measurement time length, s
+                         n_samples_per_mmnt= n_samples_per_mmnt)
+                                                 
   n <- n_times * n_samples_per_time
   # vector of measurement times
-  v_times <- rep(seq(0, time_max, length.out = n_times), times = n_samples_per_time)
+  v_times <- rep(seq(1, time_max, length.out = n_times), times = n_samples_per_time)
   # vector of true mean flux
   v_F_mean <- dlnorm(v_times, delta, k) * omega * N_appl
+  # true cumulative flux
+  F_cum <- plnorm(time_max, delta, k) * omega * N_appl
 
   # add error from chamber flux mmnt
   ci_flux <- get_ci_flux(
     noise = noise,
     SI_prefix = SI_prefix,
     height = height,
-    t_max = t_max,
+    t_max = mmnt_t_max,
     n = n_samples_per_mmnt
   )
   sd_flux <- ci_flux / 1.96
-  # true cumulative flux
-  F_cum <- plnorm(time_max, delta, k) * omega * N_appl
 
-  for (i in 1:n_sims) {
-    # add spatial variation
-    # v_F_sample <- rlnorm(n, log(v_F_mean), sigma_s)
-    m_F_sample <- sapply(rep(n, n_sims), rlnorm, log(v_F_mean), sigma_s)
-    # add error from chamber flux mmnt
-    # v_F_obs <- rnorm(n, v_F_sample, sd_flux)
-    m_F_obs <- sapply(rep(n, n_sims), rnorm, v_F_sample, sd_flux)
-    # get arithmetic mean of simulated flux at each time point
-    df_F_obs_mean <- aggregate(m_F_obs, by = list(v_times), FUN = mean)
-    # F_cum_obs <- trapz(df_F_obs_mean$Group.1, df_F_obs_mean[, 2:3])
-    v_F_cum_obs <- sapply(1 + 1:n_sims, function(x) {
-      trapz(df_F_obs_mean$Group.1, df_F_obs_mean[, x])
-    })
-    # str(v_F_cum_obs)
+  # add spatial variation
+  # calculate mu_log from arithmetic mean mu
+  v_F_meanlog <- log(v_F_mean) - 0.5 * sigma_s^2
+  m_F_sample <- sapply(rep(n, n_sims), rlnorm, v_F_meanlog, sigma_s)
+  
+  # add error from chamber flux mmnt
+  m_F_obs <- sapply(1:n_sims, function(x) {
+    rnorm(n, mean = m_F_sample[, x], sd = sd_flux)
+  })
+  
+  # get arithmetic mean of simulated flux at each time point
+  df_F_obs_mean <- aggregate(m_F_obs, by = list(v_times), FUN = mean)
+  # F_cum_obs <- trapz(df_F_obs_mean$Group.1, df_F_obs_mean[, 2:3])
+  v_F_cum_obs <- sapply(1 + 1:n_sims, function(x) {
+    trapz(df_F_obs_mean$Group.1, df_F_obs_mean[, x])
+  })
 
-    v_F_cum_error <- v_F_cum_obs - F_cum
-    v_omega_obs <- v_F_cum_obs / N_appl
-    v_omega_error <- v_omega_obs - omega
-  }
+  v_omega_obs <- v_F_cum_obs / N_appl
+  v_F_cum_error <- v_F_cum_obs - F_cum
+  v_omega_error <- v_omega_obs - omega
+  v_F_cum_rmsd <- sqrt((v_F_cum_obs - F_cum)^2)
+  v_omega_rmsd <- sqrt((v_omega_obs - omega)^2)
+  
+  F_cum_rmsd <- mean(v_F_cum_rmsd)
+  omega_rmsd <- mean(v_omega_rmsd)  
+  F_cum_error_sd <- sd(v_F_cum_error)
+  omega_error_sd <- sd(v_omega_error)
 
   if (plot_graph) {
     df <- data.frame(
-      time = v_times, F_mean = v_F_mean,
-      F_sample = v_F_sample, F_obs = m_F_obs[, 1]
+      time = v_times / secsPerDay, F_mean = v_F_mean,
+      F_sample = m_F_sample[, 1], F_obs = m_F_obs[, 1]
     )
+    cols <- c("True mean" = "black", "With spatial varn" = "blue", "With mmnt noise" = "red")
     p <- ggplot(df, aes(time, F_mean))
-    p <- p + geom_line()
-    p <- p + geom_point(aes(y = F_sample), colour = "blue")
-    p <- p + geom_point(aes(y = F_obs), colour = "red")
-    p <- p + geom_point(data = df_F_obs_mean, aes(Group.1, x), colour = "green")
-    p
+    p <- p + scale_colour_manual(name="", values = cols)
+    p <- p + geom_line(aes(colour = "True mean"))
+    p <- p + geom_point(aes(y = F_sample, colour = "With spatial varn"))
+    p <- p + geom_point(aes(y = F_obs, colour = "With mmnt noise"))
+    p <- p + geom_line(data = df_F_obs_mean, aes(Group.1 / secsPerDay, V1, colour = "With mmnt noise"))
+    print(p)
   }
-  return(data.frame(
-    F_cum_obs = v_F_cum_obs, omega_obs = v_omega_obs,
-    F_cum_true = F_cum, omega_true = omega,
-    F_cum_error = v_F_cum_error, omega_error = v_omega_error
-  ))
+
+  df <- data.frame(
+      F_cum_true = F_cum, omega_true = omega,
+      F_cum_obs_mean = mean(v_F_cum_obs), omega_obs_mean = mean(v_omega_obs),
+      F_cum_bias    = mean(v_F_cum_error), omega_bias = mean(v_omega_error),
+      F_cum_error_sd    = F_cum_error_sd, omega_error_sd = omega_error_sd,
+      F_cum_rmsd    = F_cum_rmsd, omega_rmsd = omega_rmsd,
+      F_cum_error_ci    = F_cum_rmsd*1.96, omega_error_ci = omega_rmsd*1.96,
+      F_cum_error_pc = F_cum_error_sd / F_cum * 100,
+      omega_error_pc = omega_error_sd / omega * 100,
+      F_cum_bias_pc = mean(v_F_cum_error) / F_cum * 100,
+      omega_bias_pc = mean(v_omega_error) / omega * 100,
+      ci_flux = ci_flux,
+      df_params)
+  # return(list(df = data.frame(
+  # return(df = cbind.data.frame(df, df_params) #,
+  return(df) #,
+    # v_omega_obs = v_omega_obs,
+    # v_F_cum_obs = v_F_cum_obs)
 }
 
 fit_logn <- function(v_F_obs) {
