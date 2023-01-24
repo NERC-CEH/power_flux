@@ -202,8 +202,7 @@ $$ \mu_{\mathrm{log,}t} = \mathrm{log}(\mu_{t}) - 0.5 \sigma_s^2 $$
 
 where $\sigma_s$ is the spatial standard deviation of the log-transformed flux. As examples, the figure below shows five realisations in turn. 
 
-<video controls loop><source src="README_files/figure-html/unnamed-chunk-9.webm" /></video>
-
+![](README_files/figure-html/unnamed-chunk-9.gif)<!-- -->
 
 The time course of the true mean is shown in black, and is the same in each case. Blue points show the true flux at each of the chamber locations, assuming a spatial variability given by $\sigma_s$ = 0.6. The red points show simulated measurements, with measurement noise in the system specified by $\sigma$ = 10 nmol/mol  (the residual term in the regression of $d \chi$ versus $d t$ in Equation 2 above) The red line shows the daily mean of measurements; the measured cumulative flux is commonly taken as the trapezoidal integrgation of the area under this curve. This can be compared with the true cumulative flux, the area under the black curve. By iterating many times with different values representing spatial variability, measurement noise and time length, sampling intensity, and chamber height, we can examine the variation in the uncertainty in estimates of the cumulative flux.
 
