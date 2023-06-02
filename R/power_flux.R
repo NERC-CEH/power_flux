@@ -11,7 +11,7 @@ library(fitdistrplus)
 # define the conversion unit between g N and moles of N2O
 install_unit("mol_n2o", "28 g", "mol wt of N in N2O")
 secsPerDay <- 24*60*60
-rho <- 41.742 # air density at STP, mol m-3
+rho <- set_units(41.742, mol / m^3) # air density at STP, mol m-3
 
 # Function that returns the mode of a vector
 Mode <- function(x) {
@@ -100,65 +100,86 @@ get_SI_prefix_table <- function() {
   return(df)
 }
 
-get_sigma_x <- function(x_max, n) {
-  x <- seq(from = 0, to = x_max, length.out = n)
-  sigma_x <- sd(x) # set_units(sd(x), s)
-  return(sigma_x)
+# TODO: make a worked example
+# check with lm()
+# n_gas <- 4
+# x <- c(10, 20, 30, 40)
+# y <- c(1.8, 2.2, 2.8, 4.1)
+# m <- lm(y ~ x)
+# summary(m)
+# sigma_t <- sd(x)
+# sigma_chi <- 0.3279
+# se_b <- sqrt(sigma_chi^2 / ((n_gas - 1) * sigma_t^2))
+# IS CORRECT!!
+
+# TODO: should replace with sum of squares?
+# = var(x) * (n_gas-1)
+# Var(B) = sigma^2 / SSX
+# or does n_gas just cancel out
+
+get_v_t <- function(x_max, n_gas) {
+  v_t <- seq(from = x_max / n_gas, to = x_max, length.out = n_gas)
+  return(v_t)
 }
+
+get_sigma_t <- function(v_t) {
+  sigma_t <- sd(v_t)
+  units(sigma_t) <- units(v_t)
+  return(sigma_t)
+}
+
 
 # calculates the confidence interval
 # the lmits are flux ± ci_flux
-get_ci_flux <- function(noise = 20,
-                        SI_prefix = "nano",
-                        height = 0.23,
-                        t_max = 300,
-                        n = 10) {
-  sigma_x <- get_sigma_x(x_max = t_max, n)
-  ci_b <- sqrt(noise^2 / ((n - 1) * sigma_x^2)) * 1.96
+  # sigma_t <- sapply(n_gas, get_sigma_t, x_max = t_max)
+get_ci_flux <- function(sigma_chi = set_units(25, nmol_n2o / mol),
+                     height   = set_units(0.23, m),
+                     sigma_t  = set_units(90, s),
+                     n_gas = 10) {  # no. samples
+  ci_b <- sqrt(sigma_chi^2 / ((n_gas - 1) * sigma_t^2)) * 1.96 
   # convert ci_b from mol/mol/s to flux units mol/m2/s - check correct
   ci_flux <- ci_b * rho * height
   return(ci_flux)
 }
 
-get_ci_dist <- function(meanlog = 0,
-                        sdlog = 1,
-                        max_flux = 5,
-                        noise = 20,
-                        SI_prefix = "nano",
-                        height = 0.23,
-                        t_max = 300,
-                        n = 10) {
-  v_flux <- seq(0, max_flux, by = max_flux / 100)
-  v_prob <- dlnorm(v_flux, meanlog, sdlog)
-  snr <- v_flux^2 / noise^2
+get_dt_ci <- function(sigma_chi = set_units(25, nmol_n2o / mol),
+                     height   = set_units(0.23, m),
+                     sigma_t  = set_units(90, s),
+                     n_gas = 10,        # no. samples
+                     meanlog = 0,
+                     sdlog = 1,
+                     max_flux = set_units(5, nmol_n2o / m^2 /s)) {
+  zero_flux <- max_flux - max_flux # get zero in flux units
+  v_flux <- seq(zero_flux, max_flux, by = max_flux / 100)
+  v_prob <- drop_units(dlnorm(v_flux, meanlog, sdlog))
   ci_flux <- get_ci_flux(
-    noise = noise, SI_prefix = SI_prefix, height = height,
-    t_max = t_max, n = n
+    sigma_chi = sigma_chi, height = height,
+    sigma_t = sigma_t, n_gas = n_gas
   )
-  df <- data.table(
+  snr <- v_flux^2 / ci_flux^2
+  dt <- data.table(
     prob = v_prob, flux = v_flux, ci_flux = ci_flux, snr = snr,
-    noise = noise, t_max = t_max, height = height
+    sigma_chi = sigma_chi, sigma_t = sigma_t, height = height
   )
-  return(df)
+  return(dt)
 }
 
-get_percent_detectable <- function(meanlog = 0,
-                                   sdlog = 1,
-                                   noise = 20,
-                                   SI_prefix = "nano",
-                                   height = 0.23,
-                                   t_max = 300,
-                                   n = 10) {
+get_percent_detectable <- function(sigma_chi = set_units(25, nmol_n2o / mol),
+                                   height   = set_units(0.23, m),
+                                   sigma_t  = set_units(90, s),
+                                   n_gas = 10,        # no. samples
+                                   meanlog = 0,
+                                   sdlog = 1
+                                   ) {
   ci_flux <- get_ci_flux(
-    noise = noise, SI_prefix = SI_prefix, height = height,
-    t_max = t_max, n = n
-  )
-  percent_detectable <- (1 - plnorm(ci_flux, meanlog, sdlog)) * 100
+    sigma_chi = sigma_chi, height = height,
+    sigma_t = sigma_t, n_gas = n_gas)
+  percent_detectable <- (1 - drop_units(plnorm(ci_flux, meanlog, sdlog))) * 100
   return(percent_detectable)
 }
 
-get_sigma_spatial <- function(n_samples = 10, n_sims = 1e5, location = 1,
-                              scale = 1, dist_lognormal = TRUE) {
+get_sigma_spatial <- function(n_samples = 10, n_sims = 1e5, location = 0,
+                              scale = 1.5, dist_lognormal = TRUE) {
   n <- rep(n_samples, n_sims)
   # assume same mean for either distribution (cannot have CV with mu = 0)
   mu_true <- exp(location + scale^2 / 2)
@@ -181,63 +202,69 @@ get_sigma_spatial <- function(n_samples = 10, n_sims = 1e5, location = 1,
   ))
 }
 
-get_omega_sd <- function(omega = 0.01,
-                         N_appl = 0.1489069 * 1e9, # enter as mol/m2 * 1e9 = nmol/m2
-                         noise = 1,                 # nmol / mol
-                         SI_prefix = "nano",
-                         n_times = 18,
-                         n_samples_per_time = 4,
+get_omega_sd <- function(
+                         sigma_chi = set_units(5, nmol_n2o / mol),
+                         height   = set_units(0.23, m),
+                         t_max = set_units(5*60, s), # flux measurement time length, s
+                         n_gas = 10,        # no. gas samples per mmnt
+                         N_appl = set_units(0.1489069 * 1e9, nmol_n2o / m^2), # enter as mol/m2 * 1e9 = nmol/m2
+                         omega = 0.01,
+                         n_days = 18,
+                         n_mmnt_per_day = 4,
                          n_sims = 3,
-                         time_max = 21 * secsPerDay, # time length over which measurements are taken, ~ 25 days but in secs
+                         d_max = set_units(21 * secsPerDay, s), # time length over which measurements are taken, ~ 25 days but in secs
                          delta = 11.8, 
-                         k = 0.6,
-                         sigma_s = 0.6,
-                         height = 0.23,
-                         mmnt_t_max = 5*60, # flux measurement time length, s
-                         n_samples_per_mmnt = 4,
+                         k = 0.86,
+                         sigma_s = 1.5,
                          plot_graph = TRUE) {
 
 df_params <- data.frame(omega   = omega,
                          N_appl = N_appl,
-                         noise = noise,
-                         n_times = n_times,
-                         n_samples_per_time = n_samples_per_time,
+                         sigma_chi = sigma_chi,
+                         n_days = n_days,
+                         n_mmnt_per_day = n_mmnt_per_day,
                          n_sims = n_sims,
-                         time_max = time_max, # time length over which measurements are taken, ~ 25 days but in secs
+                         d_max = d_max, # time length over which measurements are taken, ~ 25 days but in secs
                          delta = delta, 
                          k = k,
                          sigma_s = sigma_s,
-                         SI_prefix = SI_prefix,
                          height = height,
-                         mmnt_t_max = mmnt_t_max, # flux measurement time length, s
-                         n_samples_per_mmnt= n_samples_per_mmnt)
+                         t_max = t_max, # flux measurement time length, s
+                         n_gas = n_gas)
                                                  
-  n <- n_times * n_samples_per_time
+  n_mmnts <- n_days * n_mmnt_per_day
   # vector of measurement times
-  v_times <- rep(seq(1, time_max, length.out = n_times), times = n_samples_per_time)
-  # vector of true mean flux
-  v_F_mean <- dlnorm(v_times, delta, k) * omega * N_appl
+  v_times <- rep(seq(set_units(1, s), d_max, length.out = n_days), times = n_mmnt_per_day)
+  # vector of true instantaneous mean flux
+  # / set_units(1, s) is shortcut to make units correct
+  v_F_mean <- drop_units(dlnorm(v_times, delta, k)) * omega * N_appl / set_units(1, s)
+  # plot(v_times, v_F_mean)
+  # mean(v_F_mean)
+  
   # true cumulative flux
-  F_cum <- plnorm(time_max, delta, k) * omega * N_appl
+  F_cum <- drop_units(plnorm(d_max, delta, k)) * omega * N_appl
+  
+  F_mean <- plnorm(d_max, delta, k) * omega * N_appl  / d_max
 
   # add error from chamber flux mmnt
+  v_t <- get_v_t(t_max, n_gas)
+  sigma_t <- get_sigma_t(v_t)
   ci_flux <- get_ci_flux(
-    noise = noise,
-    SI_prefix = SI_prefix,
+    sigma_chi = sigma_chi,
     height = height,
-    t_max = mmnt_t_max,
-    n = n_samples_per_mmnt
+    sigma_t = sigma_t,
+    n_gas = n_gas
   )
   sd_flux <- ci_flux / 1.96
 
   # add spatial variation
   # calculate mu_log from arithmetic mean mu
-  v_F_meanlog <- log(v_F_mean) - 0.5 * sigma_s^2
-  m_F_sample <- sapply(rep(n, n_sims), rlnorm, v_F_meanlog, sigma_s)
+  v_F_meanlog <- drop_units(log(v_F_mean)) - 0.5 * sigma_s^2
+  m_F_sample <- sapply(rep(n_mmnts, n_sims), rlnorm, v_F_meanlog, sigma_s)
   
   # add error from chamber flux mmnt
   m_F_obs <- sapply(1:n_sims, function(x) {
-    rnorm(n, mean = m_F_sample[, x], sd = sd_flux)
+    rnorm(n_mmnts, mean = m_F_sample[, x], sd = sd_flux)
   })
   
   # get arithmetic mean of simulated flux at each time point
@@ -247,29 +274,39 @@ df_params <- data.frame(omega   = omega,
     trapz(df_F_obs_mean$Group.1, df_F_obs_mean[, x])
   })
 
-  v_omega_obs <- v_F_cum_obs / N_appl
+  v_F_cum_obs <- set_units(v_F_cum_obs, nmol_n2o / m^2)
+
+  v_omega_obs <- drop_units(v_F_cum_obs / N_appl)
+  
   v_F_cum_error <- v_F_cum_obs - F_cum
   v_omega_error <- v_omega_obs - omega
-  v_F_cum_rmsd <- sqrt((v_F_cum_obs - F_cum)^2)
-  v_omega_rmsd <- sqrt((v_omega_obs - omega)^2)
-  
-  F_cum_rmsd <- mean(v_F_cum_rmsd)
-  omega_rmsd <- mean(v_omega_rmsd)  
-  F_cum_error_sd <- sd(v_F_cum_error)
-  omega_error_sd <- sd(v_omega_error)
+
+# quantile(v_omega_error, probs = 0.66666666) - quantile(v_omega_error, probs = 0.6)
+# rmse(v_omega_error)
+# quantile(v_omega_error, probs = 0.975) - quantile(v_omega_error, probs = 0.5)
+# rmse(v_omega_error) * 1.96
+# hist(v_omega_error)
+
+  F_cum_rmsd <- rmse(v_F_cum_error)
+  omega_rmsd <- rmse(v_omega_error)
+  # F_cum_error_sd <- sd(v_F_cum_error)
+  # omega_error_sd <- sd(v_omega_error)
 
   if (plot_graph) {
     df <- data.frame(
       time = v_times / secsPerDay, F_mean = v_F_mean,
       F_sample = m_F_sample[, 1], F_obs = m_F_obs[, 1]
     )
-    cols <- c("True mean" = "black", "With spatial varn" = "blue", "With mmnt noise" = "red")
+    cols <- c("True mean" = "black", "With spatial varn" = "blue", 
+      "With spatial varn + mmnt noise" = "red")
     p <- ggplot(df, aes(time, F_mean))
     p <- p + scale_colour_manual(name="", values = cols)
     p <- p + geom_line(aes(colour = "True mean"))
     p <- p + geom_point(aes(y = F_sample, colour = "With spatial varn"))
-    p <- p + geom_point(aes(y = F_obs, colour = "With mmnt noise"))
-    p <- p + geom_line(data = df_F_obs_mean, aes(Group.1 / secsPerDay, V1, colour = "With mmnt noise"))
+    p <- p + geom_point(aes(y = F_obs, colour = "With spatial varn + mmnt noise"))
+    p <- p + geom_line(data = df_F_obs_mean, aes(Group.1 / secsPerDay, V1, 
+      colour = "With spatial varn + mmnt noise"))
+    p <- p + scale_y_unit(unit = "nmol_n2o / m^2 / s", limits = c(-2.5, 15))
     print(p)
   }
 
@@ -277,11 +314,13 @@ df_params <- data.frame(omega   = omega,
       F_cum_true = F_cum, omega_true = omega,
       F_cum_obs_mean = mean(v_F_cum_obs), omega_obs_mean = mean(v_omega_obs),
       F_cum_bias    = mean(v_F_cum_error), omega_bias = mean(v_omega_error),
-      F_cum_error_sd    = F_cum_error_sd, omega_error_sd = omega_error_sd,
-      F_cum_rmsd    = F_cum_rmsd, omega_rmsd = omega_rmsd,
-      F_cum_error_ci    = F_cum_rmsd*1.96, omega_error_ci = omega_rmsd*1.96,
+      # F_cum_error_sd    = F_cum_error_sd, omega_error_sd = omega_error_sd,
+      F_cum_rmsd    = F_cum_rmsd, 
+      omega_rmsd = omega_rmsd,
+      F_cum_error_ci    = F_cum_rmsd*1.96, 
       F_cum_error_pc = F_cum_error_sd / F_cum * 100,
-      omega_error_pc = omega_error_sd / omega * 100,
+      # omega_error_ci = omega_rmsd*1.96,
+      omega_ci_pc = omega_rmsd * 1.96 * 100,
       F_cum_bias_pc = mean(v_F_cum_error) / F_cum * 100,
       omega_bias_pc = mean(v_omega_error) / omega * 100,
       ci_flux = ci_flux,
